@@ -3,16 +3,9 @@
 This script will take a tar archive containing the output of the emscripten
 toolchain. This file contains any output files produced by a wasm_cc_binary or a
 cc_binary built with --config=wasm. The files are extracted into the given
-output path.
+output paths.
 
-The name of archive is expected to be of the format `foo` or `foo.XXX` and
-the contents are expected to be foo.js and foo.wasm.
-
-Several optional files may also be in the archive, including but not limited to
-foo.js.mem, pthread-main.js, and foo.wasm.map.
-
-If the file is not a tar archive, the passed file will simply be copied to its
-destination.
+The contents of the archive are expected to match the given outputs extnames.
 
 This script and its accompanying Bazel rule should allow you to extract a
 WebAssembly binary into a larger web application.
@@ -20,8 +13,7 @@ WebAssembly binary into a larger web application.
 
 import argparse
 import os
-import subprocess
-import sys
+import tarfile
 
 
 def ensure(f):
@@ -30,54 +22,34 @@ def ensure(f):
       pass
 
 
-def check(f):
-  if not os.path.exists(f):
-    raise Exception('Expected file in archive: %s' % f)
-
-
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--archive', help='The archive to extract from.')
-  parser.add_argument('--output_path', help='The path to extract into.')
+  parser.add_argument('--outputs', help='Comma separated list of files that should be extracted from the archive. Only the extname has to match a file in the archive.')
+  parser.add_argument('--allow_empty_outputs', help='If an output listed in --outputs does not exist, create it anyways.', action='store_true')
   args = parser.parse_args()
 
-  basename = os.path.basename(args.archive)
-  stem = basename.split('.')[0]
+  args.archive = os.path.normpath(args.archive)
+  args.outputs = args.outputs.split(",")
 
-  # Check the type of the input file
-  mimetype_bytes = subprocess.check_output(['file', '-Lb', '--mime-type', '--mime-encoding', args.archive])
-  mimetype = mimetype_bytes.decode(sys.stdout.encoding)
+  tar = tarfile.open(args.archive)
 
-  # If we have a tar, extract all files. If we have just a single file, copy it.
-  if 'tar' in mimetype:
-    subprocess.check_call(
-        ['tar', 'xf', args.archive, '-C', args.output_path])
-  elif 'binary' in mimetype:
-    subprocess.check_call([
-        'cp',
-        args.archive,
-        os.path.join(args.output_path, stem + '.wasm')])
-  elif 'text' in mimetype:
-    subprocess.check_call([
-        'cp',
-        args.archive,
-        os.path.join(args.output_path, stem + '.js')])
-  else:
-    subprocess.check_call(['cp', args.archive, args.output_path])
+  for member in tar.getmembers():
+    extname = '.' + member.name.split('.', 1)[1]
+    for idx, output in enumerate(args.outputs):
+      if output.endswith(extname):
+        member_file = tar.extractfile(member)
+        with open(output, "wb") as output_file:
+          output_file.write(member_file.read())
+        args.outputs.pop(idx)
+        break
 
-  # At least one of these two files should exist at this point.
-  ensure(os.path.join(args.output_path, stem + '.js'))
-  ensure(os.path.join(args.output_path, stem + '.wasm'))
-
-  # And can optionally contain these extra files.
-  ensure(os.path.join(args.output_path, stem + '.wasm.map'))
-  ensure(os.path.join(args.output_path, stem + '.worker.js'))
-  ensure(os.path.join(args.output_path, stem + '.js.mem'))
-  ensure(os.path.join(args.output_path, stem + '.data'))
-  ensure(os.path.join(args.output_path, stem + '.fetch.js'))
-  ensure(os.path.join(args.output_path, stem + '.js.symbols'))
-  ensure(os.path.join(args.output_path, stem + '.wasm.debug.wasm'))
-  ensure(os.path.join(args.output_path, stem + '.html'))
+  for output in args.outputs:
+    extname = '.' + output.split('.', 1)[1]
+    if args.allow_empty_outputs:
+      ensure(output)
+    else:
+      print("[ERROR] Archive does not contain file with extname: %s" % extname)
 
 
 if __name__ == '__main__':

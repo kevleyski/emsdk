@@ -1,4 +1,4 @@
-FROM ubuntu:focal AS stage_build
+FROM ubuntu:jammy AS stage_build
 
 ARG EMSCRIPTEN_VERSION=tot
 ENV EMSDK /emsdk
@@ -46,8 +46,6 @@ RUN echo "## Aggressive optimization: Remove debug symbols" \
     && strip -s `which node` \
     # Tests consume ~80MB disc space
     && rm -fr ${EMSDK}/upstream/emscripten/tests \
-    # Fastcomp is not supported
-    && rm -fr ${EMSDK}/upstream/fastcomp \
     # strip out symbols from clang (~extra 50MB disc space)
     && find ${EMSDK}/upstream/bin -type f -exec strip -s {} + || true \
     && echo "## Done"
@@ -56,17 +54,16 @@ RUN echo "## Aggressive optimization: Remove debug symbols" \
 # -------------------------------- STAGE DEPLOY --------------------------------
 # ------------------------------------------------------------------------------
 
-FROM ubuntu:focal AS stage_deploy
+FROM ubuntu:jammy AS stage_deploy
 
 COPY --from=stage_build /emsdk /emsdk
 
-# Fallback in case Emscripten isn't activated.
-# This will let use tools offered by this image inside other Docker images
-# (sub-stages) or with custom / no entrypoint
+# These fallback environment variables are intended for situations where the
+# entrypoint is not utilized (as in a derived image) or overridden (e.g. when
+# using `--entrypoint /bin/bash` in CLI).
+# This corresponds to the env variables set during: `source ./emsdk_env.sh`
 ENV EMSDK=/emsdk \
-    EM_CONFIG=/emsdk/.emscripten \
-    EMSDK_NODE=/emsdk/node/14.15.5_64bit/bin/node \
-    PATH="/emsdk:/emsdk/upstream/emscripten:/emsdk/upstream/bin:/emsdk/node/14.15.5_64bit/bin:${PATH}"
+    PATH="/emsdk:/emsdk/upstream/emscripten:/emsdk/node/20.18.0_64bit/bin:${PATH}"
 
 # ------------------------------------------------------------------------------
 # Create a 'standard` 1000:1000 user
@@ -79,8 +76,6 @@ ENV EMSDK=/emsdk \
 RUN echo "## Create emscripten user (1000:1000)" \
     && groupadd --gid 1000 emscripten \
     && useradd --uid 1000 --gid emscripten --shell /bin/bash --create-home emscripten \
-    && echo "umask 0000" >> /etc/bash.bashrc \
-    && echo ". /emsdk/emsdk_env.sh" >> /etc/bash.bashrc \
     && echo "## Done"
 
 # ------------------------------------------------------------------------------
@@ -89,7 +84,7 @@ RUN echo "## Update and install packages" \
     && apt-get -qq -y update \
     # Somewhere in here apt sets up tzdata which asks for your time zone and blocks
     # waiting for the answer which you can't give as docker build doesn't read from
-    # the terninal. The env vars set here avoid the interactive prompt and set the TZ.
+    # the terminal. The env vars set here avoid the interactive prompt and set the TZ.
     && DEBIAN_FRONTEND="noninteractive" TZ="America/San_Francisco" apt-get -qq install -y --no-install-recommends \
         sudo \
         libxml2 \
@@ -106,7 +101,7 @@ RUN echo "## Update and install packages" \
         build-essential \
         make \
         ant \
-        libidn11 \
+        libidn12 \
         cmake \
         openjdk-11-jre-headless \
     # Standard Cleanup on Debian images
@@ -123,6 +118,8 @@ RUN echo "## Update and install packages" \
 # ------------------------------------------------------------------------------
 # Use commonly used /src as working directory
 WORKDIR /src
+
+ENTRYPOINT ["/emsdk/docker/entrypoint.sh"]
 
 LABEL maintainer="kontakt@trzeci.eu" \
       org.label-schema.name="emscripten" \

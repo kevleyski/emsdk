@@ -71,26 +71,31 @@ def _impl(ctx):
     cc_target_os = "emscripten"
 
     emscripten_dir = ctx.attr.emscripten_binaries.label.workspace_root
+    nodejs_path = ctx.file.nodejs_bin.path
 
     builtin_sysroot = emscripten_dir + "/emscripten/cache/sysroot"
+
+    emcc_script = "emcc.%s" % ctx.attr.script_extension
+    emcc_link_script = "emcc_link.%s" % ctx.attr.script_extension
+    emar_script = "emar.%s" % ctx.attr.script_extension
 
     ################################################################
     # Tools
     ################################################################
-    clang_tool = tool(path = "emcc.sh")
+    clang_tool = tool(path = emcc_script)
     clif_match_tool = tool(path = "dummy_clif_matcher")
-    link_tool = tool(path = "emcc_link.sh")
-    archive_tool = tool(path = "emar.sh")
+    link_tool = tool(path = emcc_link_script)
+    archive_tool = tool(path = emar_script)
     strip_tool = tool(path = "NOT_USED_STRIP_TOOL")
 
     #### Legacy tool paths (much of this is redundant with action_configs, but
     #### these are still used for some things)
     tool_paths = [
-        tool_path(name = "ar", path = "emar.sh"),
+        tool_path(name = "ar", path = emar_script),
         tool_path(name = "cpp", path = "/bin/false"),
-        tool_path(name = "gcc", path = "emcc.sh"),
+        tool_path(name = "gcc", path = emcc_script),
         tool_path(name = "gcov", path = "/bin/false"),
-        tool_path(name = "ld", path = "emcc_link.sh"),
+        tool_path(name = "ld", path = emcc_link_script),
         tool_path(name = "nm", path = "NOT_USED"),
         tool_path(name = "objdump", path = "/bin/false"),
         tool_path(name = "strip", path = "NOT_USED"),
@@ -294,10 +299,6 @@ def _impl(ctx):
         # Blaze also tests if this feature is supported, before setting the "pic" build-variable.
         feature(name = "pic"),
 
-        # Blaze requests this feature if fission is requested
-        # Blaze also tests if it's supported to see if we support fission.
-        feature(name = "per_object_debug_info"),
-
         # Blaze requests this feature by default.
         # Blaze also tests if this feature is supported before setting preprocessor_defines
         # (...but why?)
@@ -344,6 +345,16 @@ def _impl(ctx):
         feature(
             name = "fastbuild",
             provides = ["variant:crosstool_build_mode"],
+        ),
+
+        # Feature to prevent 'command line too long' issues
+        feature(
+            name = "archive_param_file",
+            enabled = True,
+        ),
+        feature(
+            name = "compiler_param_file",
+            enabled = True,
         ),
 
         #### User-settable features
@@ -424,23 +435,30 @@ def _impl(ctx):
             name = "wasm_simd",
             requires = [feature_set(features = ["llvm_backend"])],
         ),
+        # Adds relaxed-simd support, only available with the llvm backend.
+        feature(
+            name = "wasm_relaxed_simd",
+            requires = [feature_set(features = ["llvm_backend"])],
+        ),
         feature(
             name = "precise_long_double_printf",
             enabled = True,
         ),
         feature(
             name = "wasm_warnings_as_errors",
-            enabled = True,
+            enabled = False,
         ),
 
         # ASan and UBSan. See also:
         # https://emscripten.org/docs/debugging/Sanitizers.html
         feature(name = "wasm_asan"),
         feature(name = "wasm_ubsan"),
-
         feature(
             name = "output_format_js",
             enabled = True,
+        ),
+        feature(
+            name = "wasm_standalone",
         ),
     ]
 
@@ -518,7 +536,7 @@ def _impl(ctx):
         # Language Features
         flag_set(
             actions = all_cpp_compile_actions,
-            flags = ["-std=gnu++17", "-nostdinc", "-nostdinc++",],
+            flags = ["-std=gnu++17", "-nostdinc", "-nostdinc++"],
         ),
 
         # Emscripten-specific settings:
@@ -549,6 +567,11 @@ def _impl(ctx):
             features = ["wasm_simd"],
         ),
         flag_set(
+            actions = all_compile_actions + all_link_actions,
+            flags = ["-msimd128", "-mrelaxed-simd"],
+            features = ["wasm_relaxed_simd"],
+        ),
+        flag_set(
             actions = all_link_actions,
             flags = ["-s", "PRINTF_LONG_DOUBLE=1"],
             features = ["precise_long_double_printf"],
@@ -573,9 +596,10 @@ def _impl(ctx):
         flag_set(
             actions = all_compile_actions +
                       all_link_actions,
-            flags = ["-O3"],
+            flags = ["-O2"],
             features = ["opt"],
         ),
+
         # Users can override opt-level with semantic names...
         flag_set(
             actions = all_compile_actions +
@@ -599,7 +623,7 @@ def _impl(ctx):
         flag_set(
             actions = all_compile_actions +
                       all_link_actions,
-            flags = ["-O2"],
+            flags = ["-O0"],
             features = ["fastbuild"],
         ),
 
@@ -619,7 +643,7 @@ def _impl(ctx):
             actions = all_compile_actions +
                       all_link_actions,
             flags = [
-                "-g4",
+                "-g",
                 "-fsanitize=address",
                 "-O1",
                 "-DADDRESS_SANITIZER=1",
@@ -910,7 +934,8 @@ def _impl(ctx):
                 "-iwithsysroot" + "/include/c++/v1",
                 "-iwithsysroot" + "/include/compat",
                 "-iwithsysroot" + "/include",
-                "-isystem", emscripten_dir + "/lib/clang/13.0.0/include",
+                "-isystem",
+                emscripten_dir + "/lib/clang/21/include",
             ],
         ),
         # Inputs and outputs
@@ -1014,6 +1039,11 @@ def _impl(ctx):
             flags = ["-Werror"],
             features = ["wasm_warnings_as_errors"],
         ),
+        flag_set(
+            actions = all_link_actions,
+            flags = ["-sSTANDALONE_WASM"],
+            features = ["wasm_standalone"],
+        ),
     ]
 
     crosstool_default_env_sets = [
@@ -1030,6 +1060,10 @@ def _impl(ctx):
                 env_entry(
                     key = "EM_CONFIG_PATH",
                     value = ctx.file.em_config.path,
+                ),
+                env_entry(
+                    key = "NODE_JS_PATH",
+                    value = nodejs_path,
                 ),
             ],
         ),
@@ -1072,7 +1106,7 @@ def _impl(ctx):
         emscripten_dir + "/emscripten/cache/sysroot/include/c++/v1",
         emscripten_dir + "/emscripten/cache/sysroot/include/compat",
         emscripten_dir + "/emscripten/cache/sysroot/include",
-        emscripten_dir + "/lib/clang/13.0.0/include",
+        emscripten_dir + "/lib/clang/21/include",
     ]
 
     artifact_name_patterns = []
@@ -1103,8 +1137,10 @@ emscripten_cc_toolchain_config_rule = rule(
     implementation = _impl,
     attrs = {
         "cpu": attr.string(mandatory = True, values = ["asmjs", "wasm"]),
-        "em_config": attr.label(mandatory = True, allow_single_file=True),
-        "emscripten_binaries": attr.label(mandatory = True),
+        "em_config": attr.label(mandatory = True, allow_single_file = True),
+        "emscripten_binaries": attr.label(mandatory = True, cfg = "exec"),
+        "nodejs_bin": attr.label(mandatory = True, allow_single_file = True),
+        "script_extension": attr.string(mandatory = True, values = ["sh", "bat"]),
     },
     provides = [CcToolchainConfigInfo],
 )

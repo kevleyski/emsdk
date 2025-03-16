@@ -14,22 +14,8 @@ if exist "%~dp0python\3.9.2-1_64bit\python.exe" (
   goto end
 )
 
-if exist "%~dp0python\3.7.4-pywin32_64bit\python.exe" (
-  set EMSDK_PY="%~dp0python\3.7.4-pywin32_64bit\python.exe"
-  set PYTHONHOME=
-  set PYTHONPATH=
-  goto end
-)
-
-if exist "%~dp0python\3.7.4_64bit\python.exe" (
-  set EMSDK_PY="%~dp0python\3.7.4_64bit\python.exe"
-  set PYTHONHOME=
-  set PYTHONPATH=
-  goto end
-)
-
-if exist "%~dp0python\2.7.13.1_64bit\python-2.7.13.amd64\python.exe" (
-  set EMSDK_PY="%~dp0python\2.7.13.1_64bit\python-2.7.13.amd64\python.exe"
+if exist "%~dp0python\3.9.2-nuget_64bit\python.exe" (
+  set EMSDK_PY="%~dp0python\3.9.2-nuget_64bit\python.exe"
   set PYTHONHOME=
   set PYTHONPATH=
   goto end

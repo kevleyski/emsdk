@@ -3,40 +3,46 @@
 ## Setup Instructions
 
 In `WORKSPACE` file, put:
-```
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-http_archive(
+```starlark
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+git_repository(
     name = "emsdk",
-    strip_prefix = "emsdk-c1589b55641787d55d53e883852035beea9aec3f/bazel",
-    url = "https://github.com/emscripten-core/emsdk/archive/c1589b55641787d55d53e883852035beea9aec3f.tar.gz",
-    sha256 = "7a58a9996b113d3e0675df30b5f17e28aa47de2e684a844f05394fe2f6f12e8e",
+    remote = "https://github.com/emscripten-core/emsdk.git",
+    tag = "3.1.64",
+    strip_prefix = "bazel",
 )
 
 load("@emsdk//:deps.bzl", emsdk_deps = "deps")
 emsdk_deps()
 
 load("@emsdk//:emscripten_deps.bzl", emsdk_emscripten_deps = "emscripten_deps")
-emsdk_emscripten_deps()
+emsdk_emscripten_deps(emscripten_version = "3.1.64")
+
+load("@emsdk//:toolchains.bzl", "register_emscripten_toolchains")
+register_emscripten_toolchains()
 ```
+The `tag` and `emscripten_version` parameters correspond to the git revision of
+[emsdk 3.1.64](https://github.com/emscripten-core/emsdk/releases/tag/3.1.64). To get access to
+newer versions, you'll need to update those. To make use of older versions, change the
+parameter of `git_repository` and `emsdk_emscripten_deps()`. Supported versions are listed in `revisions.bzl`
+
+Bazel 7+ additionally requires `platforms` dependencies in the `MODULE.bazel` file.
+```starlark
+bazel_dep(name = "platforms", version = "0.0.9")
+```
+
 
 ## Building
 
-### Using --config=wasm
-
-Put the following lines into your `.bazelrc`:
-```
-build:wasm --crosstool_top=//emscripten_toolchain:everything
-build:wasm --cpu=wasm
-build:wasm --host_crosstool_top=@bazel_tools//tools/cpp:toolchain
-```
-
-Simply pass `--config=wasm` when building a normal `cc_binary`. The result of
-this build will be a tar archive containing any files produced by emscripten.
-
-### Using wasm_cc_binary
-First, write a new rule wrapping your `cc_binary`.
+Put the following line into your `.bazelrc`:
 
 ```
+build --incompatible_enable_cc_toolchain_resolution
+```
+
+Then write a new rule wrapping your `cc_binary`.
+
+```starlark
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 
@@ -59,3 +65,31 @@ rules.
 `wasm_cc_binary` uses transition to use emscripten toolchain on `cc_target`
 and all of its dependencies, and does not require amending `.bazelrc`. This
 is the preferred way, since it also unpacks the resulting tarball.
+
+The Emscripten cache shipped by default does not include LTO, 64-bit or PIC
+builds of the system libraries and ports. If you wish to use these features you
+will need to declare the cache when you register the toolchain as follows. Note
+that the configuration consists of the same flags that can be passed to
+embuilder. If `targets` is not provided, all system libraries and ports will be
+built, i.e., the `ALL` option to embuilder.
+
+```starlark
+load("@emsdk//:toolchains.bzl", "register_emscripten_toolchains")
+register_emscripten_toolchains(cache = {
+    "configuration": ["--lto"],
+    "targets": [
+        "crtbegin",
+        "libprintf_long_double-debug",
+        "libstubs-debug",
+        "libnoexit",
+        "libc-debug",
+        "libdlmalloc",
+        "libcompiler_rt",
+        "libc++-noexcept",
+        "libc++abi-debug-noexcept",
+        "libsockets"
+    ]
+})
+```
+
+See `test_external/` for an example using [embind](https://emscripten.org/docs/porting/connecting_cpp_and_javascript/embind.html).
