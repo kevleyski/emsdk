@@ -1,33 +1,67 @@
 version: 2.1
 
 orbs:
-  win: circleci/windows@1.0.0
+  win: circleci/windows@5.0
 
 executors:
-  bionic:
+  ubuntu:
     docker:
-      - image: buildpack-deps:bionic
+      - image: buildpack-deps:focal
+  mac_arm64:
+    environment:
+      EMSDK_NOTTY: "1"
+      # Without this, any `brew install` command will result in self-update of
+      # brew itself which takes more than 4 minutes.
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    macos:
+      xcode: "13.4.1"
+    resource_class: macos.m1.medium.gen1
+  linux_arm64:
+    machine:
+      image: ubuntu-2004:2023.07.1
+    resource_class: arm.medium
+
+commands:
+  setup-macos:
+    steps:
+      - checkout
+      - run:
+          name: Install CMake
+          command: brew install cmake
+  test-macos:
+    steps:
+      - run:
+          name: test.sh
+          command: test/test.sh
+      - run:
+          name: test.py
+          command: |
+            source emsdk_env.sh
+            test/test.py
 
 jobs:
   flake8:
-    executor: bionic
+    executor: ubuntu
     steps:
       - checkout
       - run:
           name: install pip
           command: |
             apt-get update -q
-            apt-get install -q -y python-pip python3-pip
-      - run: python2 -m pip install --upgrade pip
+            apt-get install -q -y python3-pip
       - run: python3 -m pip install --upgrade pip
-      - run: python2 -m pip install flake8==3.7.8
-      - run: python3 -m pip install flake8==3.7.8
-      - run: python2 -m flake8 --show-source --statistics
-      - run: python3 -m flake8 --show-source --statistics
+      - run: python3 -m pip install flake8==7.1.1
+      - run: python3 -m flake8 --show-source --statistics --extend-exclude=./scripts
+
   test-linux:
-    executor: bionic
+    executor: ubuntu
     environment:
       EMSDK_NOTTY: "1"
+      # This is needed because the old gcc-7 that is installed on debian/bionic
+      # generates warnings about unused variables when doing C++17
+      # destructuring:
+      # https://github.com/WebAssembly/binaryen/issues/4353
+      CXXFLAGS: "-Wno-unused-variable"
       # I don't know why circleci VMs pretent to have 36 cores but its a lie.
       EMSDK_NUM_CORES: "4"
     steps:
@@ -35,6 +69,7 @@ jobs:
       - run:
           name: Install debian packages
           command: apt-get update -q && apt-get install -q -y cmake build-essential openjdk-8-jre-headless ksh zsh
+      - run: test/test_node_path.sh
       - run: test/test.sh
       - run: test/test_source_env.sh
       - run:
@@ -42,28 +77,22 @@ jobs:
           command: |
             source emsdk_env.sh
             test/test.py
-  test-mac:
-    macos:
-      xcode: "12.2.0"
-    environment:
-      EMSDK_NOTTY: "1"
-      # Without this, any `brew installl` command will result in self-update of
-      # brew itself which takes more than 4 minutes.
-      HOMEBREW_NO_AUTO_UPDATE: "1"
+  test-linux-arm64:
+    executor: linux_arm64
     steps:
       - checkout
       - run:
-          name: Install cmake
-          command: brew install cmake
+          name: Install debian packages
+          command: sudo apt-get update -q && sudo apt-get install -q cmake build-essential openjdk-8-jre-headless
       - run: test/test.sh
-      - run:
-          name: test.py
-          command: |
-            source emsdk_env.sh
-            test/test.py
+  test-mac-arm64:
+    executor: mac_arm64
+    steps:
+      - setup-macos
+      - test-macos
   test-windows:
     executor:
-      name: win/vs2019
+      name: win/server-2019
       shell: bash.exe
     environment:
       # We need python installed before we can test anytyhing.
@@ -128,32 +157,44 @@ jobs:
             $env:SYSTEM_FLAG="--system"
             test/test_path_preservation.ps1
 
-  build-docker-image:
-    executor: bionic
+  build-docker-image-x64:
+    executor: ubuntu
     steps:
       - checkout
       - run:
           name: install docker
-          command: apt-get update -q && apt-get install -q -y docker.io
-      - setup_remote_docker:
-          version: 19.03.13
-      # Build and test the tip-of-tree build of EMSDK
+          command: |
+            apt-get update -q 
+            apt-get install -q -y ca-certificates curl gnupg lsb-release
+            mkdir -p /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+            apt-get update -q
+            apt-get install -q -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+      - setup_remote_docker
+      # Build the `latest` version of EMSDK as docker image
       - run:
           name: build
-          command: make -C ./docker version=tot build
+          command: make -C ./docker version=latest build
       - run:
           name: test
-          command: make -C ./docker version=tot test
+          command: make -C ./docker version=latest test
 
-  publish-docker-image:
-    executor: bionic
+  publish-docker-image-x64:
+    executor: ubuntu
     steps:
       - checkout
       - run:
           name: install docker
-          command: apt-get update -q && apt-get install -q -y docker.io
-      - setup_remote_docker:
-          version: 19.03.13
+          command: |
+            apt-get update -q 
+            apt-get install -q -y ca-certificates curl gnupg lsb-release
+            mkdir -p /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+            apt-get update -q
+            apt-get install -q -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+      - setup_remote_docker
       - run:
           name: build
           command: make -C ./docker version=${CIRCLE_TAG} build
@@ -166,8 +207,24 @@ jobs:
             docker login -u "$DOCKER_USER" -p "$DOCKER_PASS"
             make -C ./docker version=${CIRCLE_TAG} alias=latest push
 
+  publish-docker-image-arm64:
+    executor: linux_arm64
+    steps:
+      - checkout
+      - run:
+          name: build
+          command: make -C ./docker version=${CIRCLE_TAG} build
+      - run:
+          name: test
+          command: make -C ./docker version=${CIRCLE_TAG} test
+      - run:
+          name: push image
+          command: |
+            docker login -u "$DOCKER_USER" -p "$DOCKER_PASS"
+            make -C ./docker version=${CIRCLE_TAG} alias=${CIRCLE_TAG}-arm64 only_alias=true push
+
   test-bazel-linux:
-    executor: bionic
+    executor: ubuntu
     steps:
       - checkout
       - run: apt-get install -q -y curl gnupg
@@ -183,23 +240,43 @@ jobs:
       - run:
           name: install bazel
           command: |
-            apt-get install -q -y bazel
+            apt-get install -q -y bazel-7.4.1
       - run: test/test_bazel.sh
 
-  test-bazel-mac:
-    macos:
-      xcode: "12.2.0"
+  test-bazel-mac-arm64:
+    executor: mac_arm64
     environment:
-      EMSDK_NOTTY: "1"
-      HOMEBREW_NO_AUTO_UPDATE: "1"
+      USE_BAZEL_VERSION: "7.4.1"
     steps:
       - checkout
-      - run: brew install grep
       - run:
-          name: install bazel
+          name: install bazelisk
           command: |
-            brew install bazel
+            brew install bazelisk
       - run: test/test_bazel_mac.sh
+
+  test-bazel-windows:
+    executor:
+      name: win/server-2019
+      shell: powershell.exe -ExecutionPolicy Bypass
+    environment:
+      PYTHONUNBUFFERED: "1"
+      EMSDK_NOTTY: "1"
+      USE_BAZEL_VERSION: "5.4.0"
+    steps:
+      - checkout
+      - run:
+          name: Download Bazelisk
+          shell: powershell.exe
+          command: |
+            $ProgressPreference = "SilentlyContinue"
+            Invoke-WebRequest -Uri https://github.com/bazelbuild/bazelisk/releases/download/v1.10.1/bazelisk-windows-amd64.exe -OutFile ( New-Item -Path "temp\bazel\bazel.exe" -Force )
+      - run:
+          name: Run Tests
+          shell: powershell.exe
+          command: |
+            $env:Path += ";C:\Python27amd64;$pwd\temp\bazel"
+            .\test\test_bazel.ps1
 
 workflows:
   flake8:
@@ -208,16 +285,25 @@ workflows:
   test-linux:
     jobs:
       - test-linux
-  test-mac:
+  test-linux-arm64:
     jobs:
-      - test-mac
+      - test-linux-arm64
+  test-mac-arm64:
+    jobs:
+      - test-mac-arm64
   test-windows:
     jobs:
       - test-windows
   build-docker-image:
     jobs:
-      - build-docker-image
-      - publish-docker-image:
+      - build-docker-image-x64
+      - publish-docker-image-x64:
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /.*/
+      - publish-docker-image-arm64:
           filters:
             branches:
               ignore: /.*/
@@ -226,6 +312,9 @@ workflows:
   test-bazel-linux:
     jobs:
       - test-bazel-linux
-  test-bazel-mac:
+  test-bazel-mac-arm64:
     jobs:
-      - test-bazel-mac
+      - test-bazel-mac-arm64
+  test-bazel-windows:
+    jobs:
+      - test-bazel-windows
