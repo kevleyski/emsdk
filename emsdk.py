@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python
 # Copyright 2019 The Emscripten Authors.  All rights reserved.
 # Emscripten is available under two separate licenses, the MIT license and the
@@ -1272,9 +1271,26 @@ def emscripten_npm_install(tool, directory):
     errlog('Error running %s:\n%s' % (e.cmd, e.output))
     return False
 
-  # This is currently needed because npm ci will install the packages
+  # Manually install the appropriate native Closure Compiler package
+  # This is currently needed because npm ci would install the packages
+  # for Closure for all platforms, adding 180MB to the download size
+  # There are two problems here:
+  #   1. npm ci does not consider the platform of optional dependencies
+  #      https://github.com/npm/cli/issues/558
+  #   2. A bug with the native compiler has bloated the packages from
+  #      30MB to almost 300MB
+  #      https://github.com/google/closure-compiler-npm/issues/186
+  # If either of these bugs are fixed then we can remove this exception
   # See also https://github.com/google/closure-compiler/issues/3925
+  closure_compiler_native = ''
+  if LINUX and ARCH in ('x86', 'x86_64'):
+    closure_compiler_native = 'google-closure-compiler-linux'
+  if MACOS and ARCH in ('x86', 'x86_64'):
+    closure_compiler_native = 'google-closure-compiler-osx'
+  if WINDOWS and ARCH == 'x86_64':
+    closure_compiler_native = 'google-closure-compiler-windows'
 
+  if closure_compiler_native:
     # Check which version of native Closure Compiler we want to install via npm.
     # (npm install command has this requirement that we must explicitly tell the pinned version)
     try:
@@ -1287,6 +1303,12 @@ def emscripten_npm_install(tool, directory):
       return True
 
     closure_compiler_native += '@' + closure_version
+    print('Running post-install step: npm install', closure_compiler_native)
+    try:
+      subprocess.check_output(
+        [npm, 'install', '--production', '--no-optional', closure_compiler_native],
+        cwd=directory, stderr=subprocess.STDOUT, env=env,
+        universal_newlines=True)
 
       # Installation of native Closure compiler was successful, so remove import of Java Closure Compiler module to avoid
       # a Java dependency.
@@ -1305,6 +1327,10 @@ def emscripten_npm_install(tool, directory):
         print('Removed google-closure-compiler-java dependency.')
       else:
         errlog('Failed to patch away google-closure-compiler Java dependency. ' + compiler_filename + ' does not exist.')
+    except subprocess.CalledProcessError as e:
+      errlog('Error running %s:\n%s' % (e.cmd, e.output))
+      return False
+
   print('Done running: npm ci')
 
   if os.path.isfile(os.path.join(directory, 'bootstrap.py')):
@@ -2684,19 +2710,6 @@ def expand_sdk_name(name, activating):
 
 
 def main(args):
-
-  if is_emsdk_sourced_from_github():
-    # This code only exists on the master branch
-    errlog('****')
-    errlog('Error: You appear to be using the `master` branch of emsdk.')
-    errlog('We recently made the switch to using `main`')
-    errlog('In order to continue to receive updates you will need to make the switch locally too.')
-    errlog('For normal clones without any local branches simply running the following command should be enough:')
-    errlog('  `git checkout main`')
-    errlog('For more information see https://github.com/emscripten-core/emsdk/issues/805')
-    errlog('****')
-    return 1
-
   if not args:
     errlog("Missing command; Type 'emsdk help' to get a list of commands.")
     return 1
