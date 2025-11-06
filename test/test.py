@@ -176,9 +176,9 @@ int main() {
 
     # Test the normal tools like node don't re-download on re-install
     print('another install must re-download')
-    checked_call_with_output(emsdk + ' uninstall node-20.18.0-64bit')
-    checked_call_with_output(emsdk + ' install node-20.18.0-64bit', expected='Downloading:', unexpected='already installed')
-    checked_call_with_output(emsdk + ' install node-20.18.0-64bit', unexpected='Downloading:', expected='already installed')
+    checked_call_with_output(emsdk + ' uninstall node-22.16.0-64bit')
+    checked_call_with_output(emsdk + ' install node-22.16.0-64bit', expected='Downloading:', unexpected='already installed')
+    checked_call_with_output(emsdk + ' install node-22.16.0-64bit', unexpected='Downloading:', expected='already installed')
 
   def test_tot_upstream(self):
     print('test update-tags')
@@ -220,6 +220,8 @@ int main() {
   def test_binaryen_from_source(self):
     if MACOS:
       self.skipTest("https://github.com/WebAssembly/binaryen/issues/4299")
+    if WINDOWS:
+      self.skipTest("https://github.com/emscripten-core/emsdk/issues/1624")
     print('test binaryen source build')
     run_emsdk(['install', '--build=Release', '--generator=Unix Makefiles', 'binaryen-main-64bit'])
 

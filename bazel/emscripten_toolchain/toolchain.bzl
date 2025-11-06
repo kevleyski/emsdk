@@ -71,6 +71,7 @@ def _impl(ctx):
     cc_target_os = "emscripten"
 
     emscripten_dir = ctx.attr.emscripten_binaries.label.workspace_root
+
     nodejs_path = ctx.file.nodejs_bin.path
 
     builtin_sysroot = emscripten_dir + "/emscripten/cache/sysroot"
@@ -362,6 +363,9 @@ def _impl(ctx):
         # Set if enabling exceptions.
         feature(name = "exceptions"),
 
+        # Set if enabling wasm_exceptions.
+        feature(name = "wasm_exceptions"),
+
         # This feature overrides the default optimization to prefer execution speed
         # over binary size (like clang -O3).
         feature(
@@ -404,7 +408,7 @@ def _impl(ctx):
             implies = ["profiling"],
         ),
 
-        # Turns on full debug info (-g4).
+        # Turns on full debug info (-g3).
         feature(name = "full_debug_info"),
 
         # Enables the use of "Emscripten" Pthread implementation.
@@ -514,7 +518,7 @@ def _impl(ctx):
             flags = [
                 "-fno-exceptions",
             ],
-            not_features = ["exceptions"],
+            not_features = ["exceptions", "wasm_exceptions"],
         ),
         flag_set(
             actions = all_cpp_compile_actions,
@@ -522,6 +526,14 @@ def _impl(ctx):
                 "-fexceptions",
             ],
             features = ["exceptions"],
+        ),
+        flag_set(
+            actions = all_cpp_compile_actions +
+                      all_link_actions,
+            flags = [
+                "-fwasm-exceptions",
+            ],
+            features = ["wasm_exceptions"],
         ),
         # All compiles (and implicitly link)
         flag_set(
@@ -655,7 +667,7 @@ def _impl(ctx):
             actions = all_compile_actions +
                       all_link_actions,
             flags = [
-                "-g4",
+                "-g3",
                 "-fsanitize=undefined",
                 "-O1",
                 "-DUNDEFINED_BEHAVIOR_SANITIZER=1",
@@ -680,7 +692,7 @@ def _impl(ctx):
         flag_set(
             actions = all_compile_actions +
                       all_link_actions,
-            flags = ["-g4"],
+            flags = ["-g3"],
             features = ["full_debug_info"],
         ),
         flag_set(
@@ -935,7 +947,7 @@ def _impl(ctx):
                 "-iwithsysroot" + "/include/compat",
                 "-iwithsysroot" + "/include",
                 "-isystem",
-                emscripten_dir + "/lib/clang/21/include",
+                emscripten_dir + "/lib/clang/22/include",
             ],
         ),
         # Inputs and outputs
